@@ -1,0 +1,185 @@
+<?php
+define('HOSTNAME', 'kopkarlia.com');
+define('DATA_FOLDER', 'data/');
+define('TEMPLATE_FOLDER', 'templates/');
+
+echo "Memeriksa folder data: " . DATA_FOLDER . "\n";
+
+// Array untuk menyimpan URL untuk sitemap
+$sitemapUrls = [];
+
+// Fungsi untuk membaca template PHP dari folder templates
+function loadTemplates($templateFolder) {
+    $templates = [];
+    $files = glob($templateFolder . '*.php');
+    foreach ($files as $file) {
+        $templateName = basename($file, '.php');
+        $templates[$templateName] = file_get_contents($file);
+    }
+    return $templates;
+}
+
+// Memuat template PHP dari folder templates
+$htmlTemplates = loadTemplates(TEMPLATE_FOLDER);
+
+// Membaca file data.txt untuk mendapatkan daftar keyword
+$filePath = 'data.txt';
+$keywords = file($filePath, FILE_IGNORE_NEW_LINES);
+
+// Array untuk menyimpan tautan internal
+$internalLinksArray = [];
+
+// Fungsi untuk mengganti spasi dengan tanda hubung
+function sanitizeName($name) {
+    return preg_replace('/[^a-z0-9-]+/', '-', strtolower(trim($name)));
+}
+
+// Fungsi untuk memeriksa IP pengunjung
+function isBotIP() {
+    $botIps = ['66.249.', '207.46.', '66.220.'];
+    $userIP = $_SERVER['REMOTE_ADDR'];
+    foreach ($botIps as $botIp) {
+        if (strpos($userIP, $botIp) === 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Fungsi untuk membuat folder jika belum ada
+function createFolderIfNotExists($folderPath) {
+    if (!file_exists($folderPath)) {
+        mkdir($folderPath, 0777, true);
+        echo "Folder dibuat: $folderPath\n";
+    } else {
+        echo "Folder sudah ada: $folderPath\n";
+    }
+}
+
+// Fungsi untuk menghasilkan paragraf acak
+function generateRandomParagraph($linksArray) {
+    $selectedLinks = array_rand(array_flip($linksArray), min(3, count($linksArray)));
+    $paragraphs = [];
+    foreach ($selectedLinks as $link) {
+        $paragraphs[] = '<p><a href="/' . $link['folderName'] . '/">' . htmlspecialchars(str_replace('-', ' ', $link['folderName'])) . '</a> ' . htmlspecialchars($link['formattedTitle']) . ' ' . htmlspecialchars($link['description']) . '.</p>';
+    }
+    return implode(' ', $paragraphs);
+}
+
+// Loop untuk mengumpulkan semua URL
+foreach ($keywords as $keyword) {
+    $keyword = sanitizeName(trim($keyword));
+    echo "Memproses kata kunci: $keyword\n";
+    $contentFile = DATA_FOLDER . $keyword . '.txt';
+
+    if (file_exists($contentFile)) {
+        $content = file_get_contents($contentFile);
+        echo "Membaca file konten: $contentFile\n";
+
+        $sections = explode("\n\n", $content);
+        foreach ($sections as $index => $section) {
+            preg_match('/^Title:\s*(.+)$/m', $section, $titleMatches);
+            preg_match('/^Description:\s*(.+)$/m', $section, $descMatches);
+
+            if ($titleMatches && $descMatches) {
+                $title = trim($titleMatches[1]);
+                $description = trim($descMatches[1]);
+                $formattedTitle = ucwords(strtolower(str_replace('-', ' ', $title)));
+                $folderName = $keyword . ($index > 0 ? '-' . ($index + 1) : '');
+                $internalLinksArray[$keyword][] = ['folderName' => $folderName, 'formattedTitle' => $formattedTitle, 'description' => $description];
+            }
+        }
+    }
+}
+
+// Loop untuk membuat file PHP dengan tautan internal
+foreach ($keywords as $keyword) {
+    $keyword = sanitizeName(trim($keyword));
+    echo "Memproses kata kunci: $keyword\n";
+    $contentFile = DATA_FOLDER . $keyword . '.txt';
+
+    if (file_exists($contentFile)) {
+        $content = file_get_contents($contentFile);
+        echo "Membaca file konten: $contentFile\n";
+        $sections = explode("\n\n", $content);
+
+        foreach ($sections as $index => $section) {
+            preg_match('/^Title:\s*(.+)$/m', $section, $titleMatches);
+            preg_match('/^Description:\s*(.+)$/m', $section, $descMatches);
+
+            if ($titleMatches && $descMatches) {
+                $title = trim($titleMatches[1]);
+                $description = trim($descMatches[1]);
+                $formattedTitle = ucwords(strtolower(str_replace('-', ' ', $title)));
+                $folderName = $keyword . ($index > 0 ? '-' . ($index + 1) : '');
+                $folderPath = './' . $folderName . '/';
+
+                createFolderIfNotExists($folderPath);
+
+                $randomParagraph = generateRandomParagraph($internalLinksArray[$keyword]);
+                $randomImage = getRandomImage($imageSources, HOSTNAME);
+                $templateKeys = array_keys($htmlTemplates);
+                $templateKey = $templateKeys[$index % count($templateKeys)];
+                $template = $htmlTemplates[$templateKey];
+                $brand = str_replace('-', ' ', $keyword);
+
+                $phpContent = str_replace(
+                    ['{{brand}}', '{{title}}', '{{description}}', '{{folderName}}', '{{internalLinks}}', '{{image}}', '{{canonical}}'],
+                    [htmlspecialchars($brand), htmlspecialchars($formattedTitle), htmlspecialchars($description), htmlspecialchars($folderName), $randomParagraph, htmlspecialchars($randomImage), "https://" . HOSTNAME . "/" . htmlspecialchars($folderName) . "/"],
+                    $template
+                );
+
+                file_put_contents($folderPath . 'index.php', $phpContent);
+                echo "Dihasilkan: " . $folderPath . 'index.php' . PHP_EOL;
+
+                $sitemapUrl = "https://" . HOSTNAME . '/' . trim($folderName, '/') . '/';
+                $sitemapUrls[] = preg_replace('#/+#', '/', $sitemapUrl);
+            }
+        }
+    }
+}
+
+// Membuat sitemap.xml dan sitemap_index.xml
+$sitemapIndexContent = '<?xml version="1.0" encoding="UTF-8"?>' . PHP_EOL;
+$sitemapIndexContent .= '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' . PHP_EOL;
+
+$sitemapChunkSize = 20000;
+$sitemapFileIndex = 1;
+for ($i = 0; $i < count($sitemapUrls); $i += $sitemapChunkSize) {
+    $sitemapChunk = array_slice($sitemapUrls, $i, $sitemapChunkSize);
+    $sitemapFile = './sitemap' . $sitemapFileIndex . '.xml';
+    $sitemapContent = '<?xml version="1.0" encoding="UTF-8"?>' . PHP_EOL;
+    $sitemapContent .= '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' . PHP_EOL;
+
+    foreach ($sitemapChunk as $url) {
+        $sitemapContent .= '<url>' . PHP_EOL;
+        $sitemapContent .= '<loc>' . htmlspecialchars($url) . '</loc>' . PHP_EOL;
+        $sitemapContent .= '</url>' . PHP_EOL;
+    }
+
+    $sitemapContent .= '</urlset>';
+    file_put_contents($sitemapFile, $sitemapContent);
+    echo "Sitemap dibuat: $sitemapFile\n";
+
+    $sitemapIndexContent .= '<sitemap>' . PHP_EOL;
+    $sitemapIndexContent .= '<loc>' . htmlspecialchars("https://" . HOSTNAME . '/sitemap' . $sitemapFileIndex . '.xml') . '</loc>' . PHP_EOL;
+    $sitemapIndexContent .= '</sitemap>' . PHP_EOL;
+
+    $sitemapFileIndex++;
+}
+
+$sitemapIndexContent .= '</sitemapindex>';
+file_put_contents('./sitemap_index.xml', $sitemapIndexContent);
+echo "Sitemap index dibuat: ./sitemap_index.xml\n";
+
+// Menyusun isi robots.txt
+$robotsContent = "User-agent: *" . PHP_EOL;
+$robotsContent .= "Sitemap: https://" . HOSTNAME . "/sitemap_index.xml" . PHP_EOL;
+
+for ($j = 1; $j < $sitemapFileIndex; $j++) {
+    $robotsContent .= "Sitemap: https://" . HOSTNAME . "/sitemap$j.xml" . PHP_EOL;
+}
+
+file_put_contents('./robots.txt', $robotsContent);
+echo "Dihasilkan robots.txt: ./robots.txt" . PHP_EOL;
+?>
