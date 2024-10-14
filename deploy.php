@@ -1,5 +1,5 @@
 <?php
-$hostname = 'www.kopkarlia.com';
+$hostname = 'kopkarlia.com';
 $dataFolder = 'data/';
 $templateFolder = 'templates/';
 
